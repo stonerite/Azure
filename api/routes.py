@@ -4,7 +4,7 @@ FastAPI route handlers for Azure Buddy AI.
 
 import uuid
 from typing import Optional, Dict, Any, List
-from fastapi import APIRouter, HTTPException, Depends
+from fastapi import APIRouter, HTTPException, Depends, Header
 
 from core.config import settings, Settings
 from core.models import (
@@ -16,6 +16,12 @@ from repository import get_repository
 from core.agent import AzureBuddyAgent
 
 router = APIRouter(prefix="/api", tags=["Azure Buddy"])
+
+def get_current_user_id(x_user_id: Optional[str] = Header(None)) -> str:
+    """Extract client user identity for private workspace isolation."""
+    if x_user_id and x_user_id.strip():
+        return x_user_id.strip()
+    return "anonymous"
 
 # Global state instances
 _repo: Optional[BaseRepository] = None
@@ -66,43 +72,70 @@ async def update_config(req: ConfigUpdateRequest):
     return {"status": "ok", "config_status": status}
 
 @router.get("/sessions")
-async def list_sessions(repo: BaseRepository = Depends(get_repo)):
-    """List recent study sessions."""
-    sessions = await repo.list_sessions(limit=30)
+async def list_sessions(
+    user_id: str = Depends(get_current_user_id),
+    repo: BaseRepository = Depends(get_repo)
+):
+    """List private study sessions for the authenticated or anonymous user."""
+    sessions = await repo.list_sessions(user_id=user_id, limit=30)
     return {"sessions": [s.model_dump() for s in sessions]}
 
 @router.post("/sessions")
-async def create_session(req: Optional[CreateSessionRequest] = None, repo: BaseRepository = Depends(get_repo)):
-    """Create a new study session."""
+async def create_session(
+    req: Optional[CreateSessionRequest] = None,
+    user_id: str = Depends(get_current_user_id),
+    repo: BaseRepository = Depends(get_repo)
+):
+    """Create a new private study session."""
     session_id = str(uuid.uuid4())
     title = req.title if req and req.title else "New Study Session"
     language = req.language if req and req.language else "English"
-    session = await repo.create_session(session_id=session_id, title=title, language=language)
+    effective_user_id = req.user_id if (req and req.user_id and req.user_id != "anonymous") else user_id
+    session = await repo.create_session(
+        session_id=session_id,
+        title=title,
+        language=language,
+        user_id=effective_user_id
+    )
     return session.model_dump()
 
 @router.get("/sessions/{session_id}/messages")
-async def get_session_messages(session_id: str, repo: BaseRepository = Depends(get_repo)):
-    """Retrieve message history for a session."""
+async def get_session_messages(
+    session_id: str,
+    user_id: str = Depends(get_current_user_id),
+    repo: BaseRepository = Depends(get_repo)
+):
+    """Retrieve message history for a session with ownership verification."""
+    session = await repo.get_session(session_id, user_id=user_id)
+    if not session:
+        raise HTTPException(status_code=404, detail="Session not found or unauthorized")
     messages = await repo.get_messages(session_id=session_id, limit=100)
     return {"messages": [m.model_dump() for m in messages]}
 
 @router.delete("/sessions/{session_id}")
-async def delete_session(session_id: str, repo: BaseRepository = Depends(get_repo)):
-    """Delete a session and all its messages."""
-    success = await repo.delete_session(session_id=session_id)
+async def delete_session(
+    session_id: str,
+    user_id: str = Depends(get_current_user_id),
+    repo: BaseRepository = Depends(get_repo)
+):
+    """Delete a session only if owned by the current user."""
+    success = await repo.delete_session(session_id=session_id, user_id=user_id)
     if not success:
-        raise HTTPException(status_code=404, detail="Session not found")
+        raise HTTPException(status_code=404, detail="Session not found or unauthorized")
     return {"status": "ok"}
 
 @router.post("/chat", response_model=ChatResponse)
 async def chat_interaction(
     req: ChatRequest,
+    user_id: str = Depends(get_current_user_id),
     agent: AzureBuddyAgent = Depends(get_agent)
 ):
-    """Process a user message through the Azure Buddy AI agent."""
+    """Process a user message within the user's private workspace."""
+    effective_user_id = req.user_id if (req and req.user_id and req.user_id != "anonymous") else user_id
     reply_msg, intent = await agent.handle_message(
         session_id=req.session_id,
         user_text=req.message,
-        client_lang=req.language
+        client_lang=req.language,
+        user_id=effective_user_id
     )
     return ChatResponse(message=reply_msg, intent=intent.value)

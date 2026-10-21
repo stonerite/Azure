@@ -28,12 +28,19 @@ class SQLiteRepository(BaseRepository):
         cursor.execute("""
             CREATE TABLE IF NOT EXISTS sessions (
                 id TEXT PRIMARY KEY,
+                user_id TEXT NOT NULL DEFAULT 'anonymous',
                 title TEXT NOT NULL DEFAULT 'New Study Session',
                 language TEXT DEFAULT 'English',
                 created_at TEXT NOT NULL,
                 updated_at TEXT NOT NULL
             )
         """)
+        # Auto-migrate table if user_id doesn't exist
+        cursor.execute("PRAGMA table_info(sessions)")
+        cols = [r["name"] for r in cursor.fetchall()]
+        if "user_id" not in cols:
+            cursor.execute("ALTER TABLE sessions ADD COLUMN user_id TEXT DEFAULT 'anonymous'")
+
         cursor.execute("""
             CREATE TABLE IF NOT EXISTS messages (
                 id TEXT PRIMARY KEY,
@@ -59,34 +66,48 @@ class SQLiteRepository(BaseRepository):
         """)
         cursor.execute("CREATE INDEX IF NOT EXISTS idx_messages_sess ON messages(session_id);")
         cursor.execute("CREATE INDEX IF NOT EXISTS idx_quiz_sess ON quiz_attempts(session_id);")
+        cursor.execute("CREATE INDEX IF NOT EXISTS idx_sessions_user ON sessions(user_id);")
         cursor.execute("CREATE INDEX IF NOT EXISTS idx_sessions_updated ON sessions(updated_at DESC);")
         conn.commit()
         conn.close()
 
-    async def create_session(self, session_id: str, title: str = "New Study Session", language: str = "English") -> Session:
+    async def create_session(
+        self,
+        session_id: str,
+        title: str = "New Study Session",
+        language: str = "English",
+        user_id: str = "anonymous"
+    ) -> Session:
         def _sync_create():
             now = datetime.now(timezone.utc).isoformat()
             conn = self._get_connection()
             cursor = conn.cursor()
             cursor.execute(
-                "INSERT INTO sessions (id, title, language, created_at, updated_at) VALUES (?, ?, ?, ?, ?)",
-                (session_id, title, language, now, now)
+                "INSERT INTO sessions (id, user_id, title, language, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?)",
+                (session_id, user_id, title, language, now, now)
             )
             conn.commit()
             conn.close()
-            return Session(id=session_id, title=title, language=language, created_at=now, updated_at=now)
+            return Session(id=session_id, user_id=user_id, title=title, language=language, created_at=now, updated_at=now)
         return await asyncio.to_thread(_sync_create)
 
-    async def get_session(self, session_id: str) -> Optional[Session]:
+    async def get_session(self, session_id: str, user_id: Optional[str] = None) -> Optional[Session]:
         def _sync_get():
             conn = self._get_connection()
             cursor = conn.cursor()
-            cursor.execute("SELECT * FROM sessions WHERE id = ?", (session_id,))
+            if user_id:
+                cursor.execute(
+                    "SELECT * FROM sessions WHERE id = ? AND (user_id = ? OR user_id = 'anonymous')",
+                    (session_id, user_id)
+                )
+            else:
+                cursor.execute("SELECT * FROM sessions WHERE id = ?", (session_id,))
             row = cursor.fetchone()
             conn.close()
             if row:
                 return Session(
                     id=row["id"],
+                    user_id=row["user_id"] if "user_id" in row.keys() else "anonymous",
                     title=row["title"],
                     language=row["language"],
                     created_at=row["created_at"],
@@ -95,16 +116,23 @@ class SQLiteRepository(BaseRepository):
             return None
         return await asyncio.to_thread(_sync_get)
 
-    async def list_sessions(self, limit: int = 20) -> List[Session]:
+    async def list_sessions(self, user_id: Optional[str] = None, limit: int = 20) -> List[Session]:
         def _sync_list():
             conn = self._get_connection()
             cursor = conn.cursor()
-            cursor.execute("SELECT * FROM sessions ORDER BY updated_at DESC LIMIT ?", (limit,))
+            if user_id:
+                cursor.execute(
+                    "SELECT * FROM sessions WHERE user_id = ? ORDER BY updated_at DESC LIMIT ?",
+                    (user_id, limit)
+                )
+            else:
+                cursor.execute("SELECT * FROM sessions ORDER BY updated_at DESC LIMIT ?", (limit,))
             rows = cursor.fetchall()
             conn.close()
             return [
                 Session(
                     id=row["id"],
+                    user_id=row["user_id"] if "user_id" in row.keys() else "anonymous",
                     title=row["title"],
                     language=row["language"],
                     created_at=row["created_at"],
@@ -114,7 +142,13 @@ class SQLiteRepository(BaseRepository):
             ]
         return await asyncio.to_thread(_sync_list)
 
-    async def update_session(self, session_id: str, title: Optional[str] = None, language: Optional[str] = None) -> Optional[Session]:
+    async def update_session(
+        self,
+        session_id: str,
+        title: Optional[str] = None,
+        language: Optional[str] = None,
+        user_id: Optional[str] = None
+    ) -> Optional[Session]:
         def _sync_update():
             now = datetime.now(timezone.utc).isoformat()
             conn = self._get_connection()
@@ -132,6 +166,10 @@ class SQLiteRepository(BaseRepository):
                 
             params.append(session_id)
             query = f"UPDATE sessions SET {', '.join(updates)} WHERE id = ?"
+            if user_id:
+                query += " AND (user_id = ? OR user_id = 'anonymous')"
+                params.append(user_id)
+
             cursor.execute(query, params)
             conn.commit()
             
@@ -141,6 +179,7 @@ class SQLiteRepository(BaseRepository):
             if row:
                 return Session(
                     id=row["id"],
+                    user_id=row["user_id"] if "user_id" in row.keys() else "anonymous",
                     title=row["title"],
                     language=row["language"],
                     created_at=row["created_at"],
@@ -149,10 +188,16 @@ class SQLiteRepository(BaseRepository):
             return None
         return await asyncio.to_thread(_sync_update)
 
-    async def delete_session(self, session_id: str) -> bool:
+    async def delete_session(self, session_id: str, user_id: Optional[str] = None) -> bool:
         def _sync_delete():
             conn = self._get_connection()
             cursor = conn.cursor()
+            if user_id:
+                cursor.execute("SELECT id FROM sessions WHERE id = ? AND (user_id = ? OR user_id = 'anonymous')", (session_id, user_id))
+                if not cursor.fetchone():
+                    conn.close()
+                    return False
+
             cursor.execute("DELETE FROM quiz_attempts WHERE session_id = ?", (session_id,))
             cursor.execute("DELETE FROM messages WHERE session_id = ?", (session_id,))
             cursor.execute("DELETE FROM sessions WHERE id = ?", (session_id,))

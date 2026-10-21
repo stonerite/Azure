@@ -32,6 +32,7 @@ class Message(BaseModel):
 
 class Session(BaseModel):
     id: str
+    user_id: str = "anonymous"
     title: str = "New Study Session"
     language: str = "English"
     created_at: str = Field(default_factory=lambda: datetime.now(timezone.utc).isoformat())
@@ -62,6 +63,7 @@ class ChatRequest(BaseModel):
     session_id: str
     message: str
     language: Optional[str] = "English"
+    user_id: Optional[str] = "anonymous"
 
 class ChatResponse(BaseModel):
     message: Message
@@ -70,6 +72,7 @@ class ChatResponse(BaseModel):
 class CreateSessionRequest(BaseModel):
     title: Optional[str] = "New Session"
     language: Optional[str] = "English"
+    user_id: Optional[str] = "anonymous"
 
 class ConfigUpdateRequest(BaseModel):
     supabase_url: Optional[str] = None

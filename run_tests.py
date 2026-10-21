@@ -99,6 +99,10 @@ async def run_all_tests():
 
     # Test 6: FastAPI HTTP Endpoints via ASGITransport
     total += 1
+    from api.routes import get_repo, get_agent
+    app.dependency_overrides[get_repo] = lambda: repo
+    app.dependency_overrides[get_agent] = lambda: agent
+
     transport = httpx.ASGITransport(app=app)
     async with httpx.AsyncClient(transport=transport, base_url="http://test") as client:
         # GET /api/status
@@ -138,6 +142,51 @@ async def run_all_tests():
 
     passed += 1
     print(" [PASS] Test 6: FastAPI HTTP Endpoints (/api/status, /api/sessions, /api/chat, /)")
+
+    # Test 7: Multi-User Privacy & Zero Data Leak Isolation
+    total += 1
+    transport = httpx.ASGITransport(app=app)
+    async with httpx.AsyncClient(transport=transport, base_url="http://test") as client:
+        user_a = "usr_alice_privacy_1"
+        user_b = "usr_bob_privacy_2"
+
+        # Alice creates a private session
+        alice_create = await client.post(
+            "/api/sessions",
+            headers={"X-User-Id": user_a},
+            json={"title": "Alice Private Azure Notes", "language": "English"}
+        )
+        assert alice_create.status_code == 200
+        alice_session_id = alice_create.json()["id"]
+
+        # Alice chats in her session
+        await client.post(
+            "/api/chat",
+            headers={"X-User-Id": user_a},
+            json={"session_id": alice_session_id, "message": "Explain Availability Zones", "language": "English"}
+        )
+
+        # Bob lists sessions with his own user id
+        bob_list = await client.get("/api/sessions", headers={"X-User-Id": user_b})
+        assert bob_list.status_code == 200
+        bob_sessions = [s["id"] for s in bob_list.json()["sessions"]]
+        assert alice_session_id not in bob_sessions, "Data Leak: Bob can see Alice's session in his list!"
+
+        # Bob tries to directly read Alice's message history by guessing session ID
+        bob_peek = await client.get(f"/api/sessions/{alice_session_id}/messages", headers={"X-User-Id": user_b})
+        assert bob_peek.status_code == 404, "Data Leak: Bob accessed Alice's private messages!"
+
+        # Bob tries to delete Alice's session
+        bob_delete = await client.delete(f"/api/sessions/{alice_session_id}", headers={"X-User-Id": user_b})
+        assert bob_delete.status_code == 404, "Security issue: Bob was able to delete Alice's session!"
+
+        # Alice can still access her session
+        alice_read = await client.get(f"/api/sessions/{alice_session_id}/messages", headers={"X-User-Id": user_a})
+        assert alice_read.status_code == 200
+        assert len(alice_read.json()["messages"]) >= 2
+
+    passed += 1
+    print(" [PASS] Test 7: Multi-User Workspace Privacy & Zero Data Leak Isolation")
 
     # Cleanup
     if db_path.exists():

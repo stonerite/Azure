@@ -8,27 +8,27 @@ from core.models import Session, Message, QuizAttempt
 
 class BaseRepository(ABC):
     @abstractmethod
-    async def create_session(self, session_id: str, title: str = "New Study Session", language: str = "English") -> Session:
+    async def create_session(self, session_id: str, title: str = "New Study Session", language: str = "English", user_id: str = "anonymous") -> Session:
         """Create a new study session."""
         pass
 
     @abstractmethod
-    async def get_session(self, session_id: str) -> Optional[Session]:
-        """Retrieve a session by ID."""
+    async def get_session(self, session_id: str, user_id: Optional[str] = None) -> Optional[Session]:
+        """Retrieve a session by ID with optional user ownership check."""
         pass
 
     @abstractmethod
-    async def list_sessions(self, limit: int = 20) -> List[Session]:
-        """List recent sessions ordered by updated_at descending."""
+    async def list_sessions(self, user_id: Optional[str] = None, limit: int = 20) -> List[Session]:
+        """List recent sessions for a user ordered by updated_at descending."""
         pass
 
     @abstractmethod
-    async def update_session(self, session_id: str, title: Optional[str] = None, language: Optional[str] = None) -> Optional[Session]:
+    async def update_session(self, session_id: str, title: Optional[str] = None, language: Optional[str] = None, user_id: Optional[str] = None) -> Optional[Session]:
         """Update a session's title or active language."""
         pass
 
     @abstractmethod
-    async def delete_session(self, session_id: str) -> bool:
+    async def delete_session(self, session_id: str, user_id: Optional[str] = None) -> bool:
         """Delete a session and all its associated messages and quiz attempts."""
         pass
 

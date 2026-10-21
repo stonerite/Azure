@@ -1,6 +1,6 @@
 """
 Comprehensive unit and integration test suite for Azure Buddy AI.
-Tests out-of-scope guardrail, anti-looping quiz validation, and language retention.
+Tests out-of-scope guardrail, anti-looping quiz validation, language retention, and user privacy isolation.
 """
 
 import pytest
@@ -8,10 +8,13 @@ import asyncio
 from pathlib import Path
 import tempfile
 import uuid
+import httpx
 
 from core.models import AgentIntent, MessageRole
 from core.agent import AzureBuddyAgent
 from repository.sqlite_repo import SQLiteRepository
+from server import app
+from api.routes import get_repo, get_agent
 
 @pytest.fixture
 def temp_repo():
@@ -45,9 +48,7 @@ async def test_out_of_scope_english(agent):
 @pytest.mark.asyncio
 async def test_out_of_scope_sheng(agent):
     session_id = str(uuid.uuid4())
-    # Switch to Sheng first
     await agent.handle_message(session_id, "Nieleze kwa Sheng", client_lang="Sheng")
-    # Ask out-of-scope query
     msg, intent = await agent.handle_message(session_id, "Nipee tips za football na odds za kesho")
 
     assert intent == AgentIntent.OUT_OF_SCOPE
@@ -92,7 +93,6 @@ async def test_language_retention(agent):
     # Follow up with "Cloud Concepts"
     msg2, intent2 = await agent.handle_message(session_id, "Cloud Concepts")
     assert intent2 == AgentIntent.SELECT_AREA
-    # Should retain Sheng context and bold English terms
     assert "Uzito kwenye mtihani" in msg2.content or "mada" in msg2.content.lower()
     assert "**1.1**" in msg2.content
 
@@ -105,3 +105,28 @@ async def test_concept_analogy_formatting(agent):
     assert "Gikomba" in msg.content or "market" in msg.content
     assert "**Shared Responsibility Model**" in msg.content
     assert "Exam Tip" in msg.content
+
+@pytest.mark.asyncio
+async def test_user_privacy_isolation(temp_repo, agent):
+    app.dependency_overrides[get_repo] = lambda: temp_repo
+    app.dependency_overrides[get_agent] = lambda: agent
+
+    transport = httpx.ASGITransport(app=app)
+    async with httpx.AsyncClient(transport=transport, base_url="http://test") as client:
+        user_a = "usr_alice"
+        user_b = "usr_bob"
+
+        # Alice creates a private session
+        res_a = await client.post("/api/sessions", headers={"X-User-Id": user_a}, json={"title": "Alice Private Session"})
+        assert res_a.status_code == 200
+        alice_sess_id = res_a.json()["id"]
+
+        # Bob lists sessions
+        res_b = await client.get("/api/sessions", headers={"X-User-Id": user_b})
+        assert res_b.status_code == 200
+        bob_session_ids = [s["id"] for s in res_b.json()["sessions"]]
+        assert alice_sess_id not in bob_session_ids
+
+        # Bob tries to read Alice's messages
+        res_b_peek = await client.get(f"/api/sessions/{alice_sess_id}/messages", headers={"X-User-Id": user_b})
+        assert res_b_peek.status_code == 404

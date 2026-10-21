@@ -1118,6 +1118,12 @@
         <input type="password" id="cfg-openai-key" placeholder="sk-proj-...">
       </div>
 
+      <div style="margin-top: 18px; padding-top: 14px; border-top: 1px solid var(--border);">
+        <label style="display: block; font-size: 0.78rem; font-weight: 500; margin-bottom: 4px; color: var(--text);">Privacy & Data Isolation</label>
+        <p style="font-size: 0.75rem; color: var(--text-tertiary); margin-bottom: 10px;">Each device/browser receives an isolated workspace so study sessions are never shared or leaked.</p>
+        <button type="button" class="btn-secondary" style="font-size: 0.76rem; padding: 5px 11px; color: #ef4444; border-color: rgba(239, 68, 68, 0.3);" onclick="resetUserIdentity()">Reset Local Identity & Start Fresh</button>
+      </div>
+
       <div class="modal-actions">
         <button class="btn-secondary" onclick="closeSettings()">Cancel</button>
         <button class="btn-primary" onclick="saveSettings()">Save Changes</button>
@@ -1129,6 +1135,30 @@
     let activeSessionId = null;
     let sessions = [];
     let isWaitingResponse = false;
+
+    // Client Private Identity Isolation
+    function getUserId() {
+      let uid = localStorage.getItem('az_buddy_user_id');
+      if (!uid) {
+        uid = 'usr_' + (window.crypto && crypto.randomUUID ? crypto.randomUUID().replace(/-/g, '') : Math.random().toString(36).substring(2) + Date.now());
+        localStorage.setItem('az_buddy_user_id', uid);
+      }
+      return uid;
+    }
+
+    function authHeaders(extra = {}) {
+      return {
+        'X-User-Id': getUserId(),
+        ...extra
+      };
+    }
+
+    function resetUserIdentity() {
+      showConfirmToast('Start completely fresh with a new private identity? Previous sessions will be disconnected from this browser.', () => {
+        localStorage.removeItem('az_buddy_user_id');
+        window.location.reload();
+      }, 'Reset Identity', 'Keep Current');
+    }
 
     // Theme Management
     function initTheme() {
@@ -1182,7 +1212,7 @@
 
     async function checkStatus() {
       try {
-        const res = await fetch('/api/status');
+        const res = await fetch('/api/status', { headers: authHeaders() });
         const data = await res.json();
         
         const dbDot = document.getElementById('db-status-dot');
@@ -1201,7 +1231,7 @@
 
     async function loadSessions() {
       try {
-        const res = await fetch('/api/sessions');
+        const res = await fetch('/api/sessions', { headers: authHeaders() });
         const data = await res.json();
         sessions = data.sessions || [];
         renderSessionList();
@@ -1234,8 +1264,8 @@
         const lang = document.getElementById('language-select').value;
         const res = await fetch('/api/sessions', {
           method: 'POST',
-          headers: {'Content-Type': 'application/json'},
-          body: JSON.stringify({ title: 'New Study Session', language: lang })
+          headers: authHeaders({'Content-Type': 'application/json'}),
+          body: JSON.stringify({ title: 'New Study Session', language: lang, user_id: getUserId() })
         });
         const session = await res.json();
         sessions.unshift(session);
@@ -1259,7 +1289,7 @@
     function deleteSession(sessionId) {
       showConfirmToast('Delete this study session?', async () => {
         try {
-          await fetch(`/api/sessions/${sessionId}`, { method: 'DELETE' });
+          await fetch(`/api/sessions/${sessionId}`, { method: 'DELETE', headers: authHeaders() });
           sessions = sessions.filter(x => x.id !== sessionId);
           if (activeSessionId === sessionId) {
             if (sessions.length > 0) selectSession(sessions[0].id);
@@ -1278,7 +1308,7 @@
       const container = document.getElementById('messages-container');
       container.innerHTML = '<div style="text-align: center; color: var(--text-tertiary); font-size: 0.84rem; padding: 30px;">Loading conversation history...</div>';
       try {
-        const res = await fetch(`/api/sessions/${sessionId}/messages`);
+        const res = await fetch(`/api/sessions/${sessionId}/messages`, { headers: authHeaders() });
         const data = await res.json();
         container.innerHTML = '';
         
@@ -1414,11 +1444,12 @@
         const lang = document.getElementById('language-select').value;
         const res = await fetch('/api/chat', {
           method: 'POST',
-          headers: {'Content-Type': 'application/json'},
+          headers: authHeaders({'Content-Type': 'application/json'}),
           body: JSON.stringify({
             session_id: activeSessionId,
             message: text,
-            language: lang
+            language: lang,
+            user_id: getUserId()
           })
         });
         const data = await res.json();

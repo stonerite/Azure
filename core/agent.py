@@ -234,15 +234,22 @@ class AzureBuddyAgent:
 
         return None
 
-    async def handle_message(self, session_id: str, user_text: str, client_lang: Optional[str] = None) -> Tuple[Message, AgentIntent]:
+    async def handle_message(
+        self,
+        session_id: str,
+        user_text: str,
+        client_lang: Optional[str] = None,
+        user_id: str = "anonymous"
+    ) -> Tuple[Message, AgentIntent]:
         """Main agent interaction pipeline."""
         # 1. Fetch Session and State
-        session = await self.repo.get_session(session_id)
+        session = await self.repo.get_session(session_id, user_id=user_id)
         if not session:
             session = await self.repo.create_session(
                 session_id=session_id,
                 title="New Study Session",
-                language=client_lang or "English"
+                language=client_lang or "English",
+                user_id=user_id
             )
 
         active_lang = client_lang or session.language or "English"
@@ -259,7 +266,7 @@ class AzureBuddyAgent:
 
         state.language = active_lang
         if session.language != active_lang:
-            await self.repo.update_session(session_id, language=active_lang)
+            await self.repo.update_session(session_id, language=active_lang, user_id=user_id)
 
         # 3. Classify Intent
         intent = self.classify_intent(user_text, state)

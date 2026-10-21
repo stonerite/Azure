@@ -1,0 +1,8 @@
+__pycache__/
+*.pyc
+.env
+azure_buddy_local.db
+.git
+.agents
+tests/
+run_tests.py

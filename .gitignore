@@ -1,0 +1,20 @@
+# Secrets and Environment Variables
+.env
+
+# Local Databases
+*.db
+azure_buddy_local.db
+
+# Python bytecode and caches
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+env/
+venv/
+.venv/
+.pytest_cache/
+
+# Vercel
+.vercel
